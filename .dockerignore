@@ -1,0 +1,15 @@
+node_modules
+client/node_modules
+dist
+client/dist
+.env
+*.log
+.git
+.gitignore
+README.md
+Dockerfile
+docker-compose.yml
+pnpm-lock.yaml
+package-lock.json
+drizzle
+tests
