@@ -40,13 +40,13 @@
     "viem": "latest",
     "zod": "^3.22.0",
     "exa-js": "^2.10.2",
-    "https-proxy-agent": "^7.0.5"
+    "https-proxy-agent": "^7.0.5",
+    "drizzle-kit": "latest"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@types/node": "^20.0.0",
-    "drizzle-kit": "latest",
     "tsx": "^4.21.0",
     "typescript": "^5.1.0",
     "vitest": "^1.3.0"
