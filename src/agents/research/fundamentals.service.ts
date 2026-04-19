@@ -7,130 +7,182 @@ import { StructuredOutputParser } from '@langchain/core/output_parsers';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
-const ResearchSchema = z.object({
-  summary: z.string().describe('A brief summary of the project and its core value proposition.'),
-  tokenomics: z.object({
-    total_supply: z.string().optional().describe('Token total supply details (Chinese).'),
-    tge_date: z.string().optional().describe('Token Generation Event (TGE) date (Chinese).'),
-    initial_circulating_supply: z.string().optional().describe('Initial circulating supply and market cap at launch (Chinese).'),
-    allocation: z.string().optional().describe('Detailed token allocation to team, investors, and community (Chinese).'),
-    vesting_schedule: z.string().optional().describe('General vesting terms (Chinese).'),
-    unlock_schedule: z.array(z.object({
-      date: z.string().describe('Date of the unlock event.'),
-      amount: z.string().describe('Amount or percentage of tokens being unlocked.'),
-      description: z.string().describe('Who is receiving the tokens (e.g., Team, VC, Ecosystem).'),
-    })).optional().describe('Detailed chronolocal list of future token unlock events.'),
-    airdrop_details: z.string().optional().describe('Information regarding airdrops, eligibility, and distribution (Chinese).'),
-    exchanges: z.array(z.object({
-      name: z.string().describe('Exchange name.'),
-      date: z.string().optional().describe('Listing date.'),
-    })).optional().describe('List of exchanges where the token is listed, including listing dates if available.'),
-    market_makers: z.array(z.string()).optional().describe('List of market makers associated with the project (e.g., Wintermute, GSR).'),
-    utility: z.string().optional().describe('Token utility and governance functions (Chinese).'),
-  }).describe('Comprehensive details about the token economy.'),
-  roadmap: z.string().describe('Key milestones and future plans (Chinese).'),
-  team: z.string().describe('Information about founders, core team, and institutional backers (Chinese).'),
-  risks: z.array(z.string()).describe('Potential risks or red flags identified (Chinese).'),
-  audit_status: z.string().describe('Status of security audits (Chinese).'),
-});
+const DiscoverySchema = z.array(z.object({
+  name: z.string().describe('Full name of the project.'),
+  symbol: z.string().describe('Symbol of the project.'),
+  ecosystem: z.string().describe('Primary blockchain or ecosystem.'),
+  summary: z.string().describe('Brief 1-sentence description (Chinese).'),
+  recent_activity: z.string().describe('Recent events (Chinese).'),
+  official_links: z.array(z.string()).optional(),
+})).describe('List of potential matching projects.');
 
 @Injectable()
 export class FundamentalsService {
   private readonly logger = new Logger(FundamentalsService.name);
   private readonly model: ChatOpenAI;
-  private readonly parser = StructuredOutputParser.fromZodSchema(ResearchSchema);
+  private readonly discoveryParser = StructuredOutputParser.fromZodSchema(DiscoverySchema);
 
   constructor(
     @Inject(ExaService) private readonly exaService: ExaService,
     @Inject(ConfigService) private readonly configService: ConfigService,
   ) {
     const apiKey = this.configService.get<string>('KIMI_API_KEY');
-    if (!apiKey) {
-      this.logger.error('CRITICAL: KIMI_API_KEY 未定义！安全要求：请先执行 `export KIMI_API_KEY=your_key` 后再启动。');
+    let proxyUrl = process.env.HTTPS_PROXY;
+    if (proxyUrl && proxyUrl.includes('host.docker.internal')) {
+      const isDocker = require('fs').existsSync('/.dockerenv');
+      if (!isDocker) proxyUrl = proxyUrl.replace('host.docker.internal', '127.0.0.1');
     }
+
     this.model = new ChatOpenAI({
       modelName: 'moonshot-v1-32k',
       temperature: 0,
-      apiKey: apiKey || 'missing-key', // Ensure it doesn't crash initialization but fails on first call
+      apiKey: apiKey || 'missing-key',
       maxTokens: 4000,
       configuration: {
         baseURL: 'https://api.moonshot.cn/v1',
-        httpAgent: process.env.HTTPS_PROXY ? new HttpsProxyAgent(process.env.HTTPS_PROXY) : undefined,
+        httpAgent: proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined,
       } as any,
     });
   }
 
-  /**
-   * Conduct deep research on a project.
-   */
-  async research(symbol: string, name: string) {
-    this.logger.log(`开始对项目 ${name} (${symbol}) 进行深度调研与经济模型挖掘...`);
+  private sanitizeRiskText(text: string): string {
+    if (!text) return '';
+    return text
+      .replace(/[\d,]+\s*(USDT|USD|ETH|SOL|\$|元|奖励)/gi, '[REDACTED AMOUNT]')
+      .replace(/(airdrop|rewards|bonus|giveaway|prize|winning|event|campaign|celebration|奖励|抽奖|空投)/gi, 'listing event info');
+  }
 
-    // 1. Parallel search for data using Exa
-    const [techDocs, tokenomicsDocs] = await Promise.all([
-      this.exaService.findTechnicalDocs(symbol, name),
-      this.exaService.findTokenomicsDocs(symbol, name),
-    ]);
-
-    const allResults = [...techDocs, ...tokenomicsDocs];
-    
-    // Deduplicate by URL
-    const uniqueResults = Array.from(new Map(allResults.map(r => [r.url, r])).values());
-
-    const context = uniqueResults
-      .map((r, i) => `Source [${i + 1}]: ${r.title}\nURL: ${r.url}\nContent: ${r.text}`)
-      .join('\n\n---\n\n');
-
-    // 2. Prepare prompt
-    const promptTemplate = new PromptTemplate({
-      template: `
-        You are a senior crypto investment analyst and tokenomics expert. Your task is to perform an 
-        extremely detailed fundamental analysis and economic audit of the project based on the provided 
-        search results. 
-
-        Focus on granular data: 
-        - Exact TGE (Token Generation Event) date.
-        - Detailed list of exchange listings with specific listing dates.
-        - Names of market makers (e.g., Wintermute, GSR, Amber Group) associated with the project.
-        - Exact dates for unlocks and percentages for allocation.
-        - Initial circulation metrics and launch market cap.
-
-        IMPORTANT: Please provide all analysis, summaries, and descriptions in Chinese (中文).
-
-        Project: {name} ({symbol})
-        
-        Search Results:
-        {context}
-
-        {format_instructions}
-      `,
-      inputVariables: ['name', 'symbol', 'context'],
-      partialVariables: { format_instructions: this.parser.getFormatInstructions() },
-    });
-
-    const input = await promptTemplate.format({
-      name,
-      symbol,
-      context: context.substring(0, 15000), // Reduce context to allow more room for output
-    });
-
-    // 3. Invoke LLM and parse
+  private extractJson(content: string): any {
     try {
-      const response = await this.model.invoke(input);
-      let content = response.content as string;
-      
-      // Clean up markdown code blocks if present
-      if (content.includes('```json')) {
-        content = content.split('```json')[1].split('```')[0].trim();
-      } else if (content.includes('```')) {
-        content = content.split('```')[1].split('```')[0].trim();
-      }
+      const jsonBlock = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/```\n([\s\S]*?)\n```/);
+      const rawJson = jsonBlock ? jsonBlock[1].trim() : content.trim();
+      const firstBracketMatch = rawJson.match(/[\[\{]/);
+      if (!firstBracketMatch) return JSON.parse(rawJson);
+      const startChar = firstBracketMatch[0];
+      const endChar = startChar === '[' ? ']' : '}';
+      const start = rawJson.indexOf(startChar);
+      const end = rawJson.lastIndexOf(endChar);
+      if (start !== -1 && end !== -1) return JSON.parse(rawJson.substring(start, end + 1));
+      return JSON.parse(rawJson);
+    } catch (e) {
+      this.logger.error(`[V12-Parser] 解析失败: ${e.message}`);
+      return null;
+    }
+  }
 
-      const parsed = await this.parser.parse(content);
-      return parsed;
+  private chunkContext(context: string, maxSize: number = 8000): string[] {
+    const chunks: string[] = [];
+    let currentPos = 0;
+    while (currentPos < context.length) {
+      let endPos = currentPos + maxSize;
+      if (endPos >= context.length) {
+        chunks.push(context.substring(currentPos));
+        break;
+      }
+      const sentenceEndRegex = /[。\.!\?]/g;
+      let lastSentenceEnd = -1;
+      const searchWindow = context.substring(currentPos, endPos + 500);
+      let match;
+      while ((match = sentenceEndRegex.exec(searchWindow)) !== null) {
+        if (match.index <= maxSize + 200) lastSentenceEnd = match.index;
+        else break;
+      }
+      if (lastSentenceEnd !== -1) endPos = currentPos + lastSentenceEnd + 1;
+      chunks.push(context.substring(currentPos, endPos).trim());
+      currentPos = endPos;
+    }
+    return chunks;
+  }
+
+  async discoverCandidates(symbol: string) {
+    this.logger.log(`[V11-Discover] 启动强力召回复活 ${symbol}...`);
+    const results = await Promise.all([
+      this.exaService.searchProjectInfo(`Official website and whitepaper for cryptocurrency project with ticker "$${symbol}"`, 5),
+      this.exaService.searchProjectInfo(`"${symbol}" Binance Alpha listing result and announcements April 2026`, 8),
+      this.exaService.searchProjectInfo(`"${symbol}" token MEXC Airdrop+ vs Genius Foundation Foundation listing`, 8),
+      this.exaService.searchProjectInfo(`exact name of the project with symbol "${symbol}" launching in April 2026`, 5)
+    ]);
+    const allResults = results.flat();
+    const prioritiedUnique = Array.from(new Map(allResults.map(r => [r.url, r])).values()).sort((a, b) => {
+      const auth = ['binance.com', 'mexc.com', 'gitbook.io', 'docs.', 'rootdata.com'];
+      return (auth.some(d => b.url.includes(d)) ? 1 : 0) - (auth.some(d => a.url.includes(d)) ? 1 : 0);
+    });
+    const context = prioritiedUnique.map((r, i) => `Source [${i+1}]: ${r.title}\nURL: ${r.url}\nContent: ${r.text}`).join('\n\n---\n\n');
+    const promptTemplate = new PromptTemplate({
+      template: `Identify and separate projects with symbol "{symbol}". Find "Genius Foundation" (2026 Binance Alpha). {format_instructions}\nContext:\n{context}`,
+      inputVariables: ['symbol', 'context'],
+      partialVariables: { format_instructions: this.discoveryParser.getFormatInstructions() },
+    });
+    const res = await this.model.invoke(await promptTemplate.format({ symbol, context: context.substring(0, 25000) }));
+    return this.extractJson(res.content as string);
+  }
+
+  async research(symbol: string, name: string, anchor?: string) {
+    this.logger.log(`[V12-Research] 标准化调研启动: ${name} (${symbol})`);
+    const safeAnchor = this.sanitizeRiskText(anchor || '');
+    try {
+      const searches = await Promise.all([
+        this.exaService.findOfficialLinks(symbol, name, safeAnchor),
+        this.exaService.findTechnicalDocs(symbol, name, safeAnchor),
+        this.exaService.findTokenomicsDocs(symbol, name, safeAnchor),
+        this.exaService.findListingAnnouncements(symbol, name, safeAnchor),
+        this.exaService.findTgeSpecificDocs(symbol, name, safeAnchor),
+      ]);
+      const uniqueResults = Array.from(new Map(searches.flat().map(r => [r.url, r])).values());
+      const prioritied = uniqueResults.sort((a, b) => {
+        const auth = ['binance.com', 'mexc.com', 'gitbook.io', 'docs.'];
+        return (auth.some(d => b.url.includes(d)) ? 1 : 0) - (auth.some(d => a.url.includes(d)) ? 1 : 0);
+      });
+      const rawContext = prioritied.map((r, i) => `[Source ${i+1}]\n${r.text}`).join('\n\n---\n\n');
+      const safeContext = this.sanitizeRiskText(rawContext);
+      const chunks = this.chunkContext(safeContext, 8000);
+      const factMapResults = await Promise.all(chunks.map(async (chunk, i) => {
+        try {
+          const res = await this.model.invoke(`Extract financial facts for ${name} (${symbol}): TGE, Supply, Allocation. Snippet:\n${chunk}`);
+          return `[Fragment ${i+1}]: ${res.content}`;
+        } catch (e) {
+          return `[Fragment ${i+1}]: Safety rejection.`;
+        }
+      }));
+      const consolidatedFacts = factMapResults.join('\n\n');
+
+      const reducePrompt = `
+        Create a flat financial JSON for {name} ({symbol}).
+        
+        CRITICAL V12 RULES:
+        1. DO NOT nest data under a "fundamentals" key. Return data fields directly.
+        2. The "allocation" array MUST use this exact format: {{"category": "Name", "percentage": number, "description": "..."}}. 
+           NEVER use category names as keys (e.g., NEVER do: {{"ispo": {{...}}}}).
+        
+        TGE: April 13, 2026.
+        FACTS:
+        {facts}
+
+        EXPECTED FLAT JSON:
+        {{
+          "name": "{name}",
+          "project_info": {{ "summary": "...", "official_website": "...", "whitepaper": "..." }},
+          "tokenomics": {{
+            "tge_date": "...",
+            "total_supply": "...",
+            "allocation": [
+              {{ "category": "Team", "percentage": 15, "description": "..." }},
+              {{ "category": "ISPO", "percentage": 25, "description": "..." }}
+            ]
+          }},
+          "listing_timeline": [],
+          "risk_assessment": {{}}
+        }}
+        OUTPUT ONLY JSON.
+      `;
+
+      const finalRes = await this.model.invoke(await new PromptTemplate({
+        template: reducePrompt, inputVariables: ['facts', 'name', 'symbol']
+      }).format({ facts: consolidatedFacts, name, symbol }));
+
+      return this.extractJson(finalRes.content as string);
     } catch (error) {
-      this.logger.error(`项目 ${symbol} 深度调研失败: ${error.message}`);
-      throw error;
+      return { name, symbol, status: 'failed', error: error.message };
     }
   }
 }

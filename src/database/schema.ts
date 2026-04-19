@@ -53,3 +53,26 @@ export const topGainersLogs = pgTable('top_gainers_logs', {
   captureTime: timestamp('capture_time').defaultNow().notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+/**
+ * V13: Watchlist for Anomaly Volatility Monitoring
+ */
+export const watchlist = pgTable('watchlist', {
+  id: serial('id').primaryKey(),
+  symbol: varchar('symbol', { length: 20 }).notNull().unique(),
+  source: varchar('source', { length: 20 }).notNull(), // 'auto' (from gainers) | 'manual' (from user)
+  lastPrice: numeric('last_price', { precision: 30, scale: 10 }), // For 1m delta calculation
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+/**
+ * V13: Records of Anomaly Volatility events (>= 5% change in 1m)
+ */
+export const volatilityAlerts = pgTable('volatility_alerts', {
+  id: serial('id').primaryKey(),
+  symbol: varchar('symbol', { length: 20 }).notNull(),
+  changePercent: numeric('change_percent', { precision: 10, scale: 2 }).notNull(),
+  priceAtAlert: numeric('price_at_alert', { precision: 30, scale: 10 }).notNull(),
+  direction: varchar('direction', { length: 10 }).notNull(), // 'up' | 'down'
+  timestamp: timestamp('timestamp').defaultNow().notNull(),
+});

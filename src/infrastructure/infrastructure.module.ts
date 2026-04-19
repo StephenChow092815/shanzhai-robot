@@ -1,11 +1,21 @@
-import { Global, Module } from '@nestjs/common';
+import { Module } from '@nestjs/common';
+import { BinanceApiService } from './binance-api.service';
 import { ExaService } from './exa.service';
 import { DexScreenerService } from './dexscreener.service';
-import { BinanceApiService } from './binance-api.service';
+import { RealtimeGateway } from './realtime.gateway';
 
-@Global()
 @Module({
-  providers: [ExaService, DexScreenerService, BinanceApiService],
-  exports: [ExaService, DexScreenerService, BinanceApiService],
+  providers: [
+    BinanceApiService, 
+    ExaService, 
+    DexScreenerService,
+    RealtimeGateway
+  ],
+  exports: [
+    BinanceApiService, 
+    ExaService, 
+    DexScreenerService,
+    RealtimeGateway
+  ],
 })
 export class InfrastructureModule {}

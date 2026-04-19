@@ -9,24 +9,31 @@ export class ExaService {
   constructor() {
     const apiKey = process.env.EXA_API_KEY;
     if (!apiKey) {
-      this.logger.error('CRITICAL: EXA_API_KEY 未定义！安全要求：请先执行 `export EXA_API_KEY=your_key` 后再启动。');
+      this.logger.error('CRITICAL: EXA_API_KEY 未定义！');
     }
     this.exa = new Exa(apiKey || 'missing-key');
   }
 
   /**
-   * Search for project information and return contents.
-   * @param query The search query.
-   * @param numResults Number of results to return.
+   * V11: Sanitize anchor to avoid high-risk promotional triggers
    */
+  private sanitize(text?: string): string {
+    if (!text) return '';
+    // 1. Strip suspicious amounts (e.g., 45,000, 1M, $100)
+    let clean = text.replace(/[\d,]+\s*(USDT|USD|ETH|SOL|\$|coins|tokens)/gi, 'some amount');
+    // 2. Remove hype words
+    clean = clean.replace(/(airdrop|rewards|bonus|giveaway|prize|winning|event|campaign|celebration)/gi, 'listing info');
+    // 3. Keep it short (max 100 chars for anchor)
+    return clean.substring(0, 100);
+  }
+
   async searchProjectInfo(query: string, numResults: number = 5) {
     try {
-      this.logger.log(`[Exa] 正在搜索: ${query}`);
+      this.logger.log(`[Exa] 正在执行精准搜索: ${query}`);
       const result = await this.exa.searchAndContents(query, {
         numResults,
-        useAutoprompt: true,
-        text: true, // Get full text content
-        highlights: true,
+        useAutoprompt: false,
+        text: { maxCharacters: 15000 },
       });
       return result.results;
     } catch (error) {
@@ -35,19 +42,48 @@ export class ExaService {
     }
   }
 
-  /**
-   * Specific search for whitepapers or technical docs.
-   */
-  async findTechnicalDocs(symbol: string, name: string) {
-    const query = `official whitepaper or technical documentation for ${name} (${symbol}) crypto project`;
+  async findOfficialLinks(symbol: string, name: string, anchor?: string) {
+    const cleanAnchor = this.sanitize(anchor);
+    const query = `official website and twitter for "${name}" (${symbol}) ${cleanAnchor} crypto -Cardano -Yield`;
     return this.searchProjectInfo(query, 3);
   }
 
-  /**
-   * Specific search for tokenomics, vesting, and unlock schedules.
-   */
-  async findTokenomicsDocs(symbol: string, name: string) {
-    const query = `tokenomics, TGE date, exchange listing history, market makers, initial circulating supply, vesting schedule, and token unlock events for ${name} (${symbol}) crypto project`;
-    return this.searchProjectInfo(query, 5); // Request more results for tokenomics
+  async findTechnicalDocs(symbol: string, name: string, anchor?: string) {
+    const cleanAnchor = this.sanitize(anchor);
+    const query = `"${name}" (${symbol}) ${cleanAnchor} original whitepaper tokenomics technical site:gitbook.io OR site:docs.*`;
+    return this.searchProjectInfo(query, 5);
+  }
+
+  async findListingAnnouncements(symbol: string, name: string, anchor?: string) {
+    const cleanAnchor = this.sanitize(anchor);
+    const query = `"${name}" ("${symbol}") ${cleanAnchor} Binance Alpha listing announcement news`;
+    return this.exa.searchAndContents(query, {
+      numResults: 10,
+      useAutoprompt: false,
+      includeDomains: ['binance.com', 'mexc.com', 'bitget.com', 'bingx.com', 'cryptorank.io', 'rootdata.com'],
+      text: { maxCharacters: 15000 },
+    }).then(res => res.results);
+  }
+
+  async findTgeSpecificDocs(symbol: string, name: string, anchor?: string) {
+    const cleanAnchor = this.sanitize(anchor);
+    const query = `"${name}" "${symbol}" ${cleanAnchor} TGE date launchpad allocation`;
+    return this.exa.searchAndContents(query, {
+      numResults: 5,
+      useAutoprompt: false,
+      includeDomains: ['binance.com', 'mexc.com', 'twitter.com', 'medium.com'],
+      text: { maxCharacters: 15000 },
+    }).then(res => res.results);
+  }
+
+  async findTokenomicsDocs(symbol: string, name: string, anchor?: string) {
+    const cleanAnchor = this.sanitize(anchor);
+    const query = `"${name}" "${symbol}" ${cleanAnchor} total supply allocation vesting unlock schedule`;
+    return this.exa.searchAndContents(query, {
+      numResults: 8,
+      useAutoprompt: false,
+      includeDomains: ['tokenomist.ai', 'gitbook.io', 'binance.com'],
+      text: { maxCharacters: 15000 },
+    }).then(res => res.results);
   }
 }

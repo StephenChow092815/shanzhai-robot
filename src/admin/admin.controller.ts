@@ -1,156 +1,174 @@
-import { Controller, Post, Body, Get, Logger, Inject, Query } from '@nestjs/common';
-import { ResearchGraph } from '../agents/research/research-graph';
-import { DexScreenerService } from '../infrastructure/dexscreener.service';
-import { DATABASE_CONNECTION } from '../database/database.module';
-import { topGainersLogs } from '../database/schema';
-import { desc, eq, and, gte, lte, count } from 'drizzle-orm';
+import { 
+  Controller, 
+  Get, 
+  Post, 
+  Delete,
+  Param,
+  Body, 
+  Logger, 
+  Query, 
+  Inject,
+  BadRequestException
+} from '@nestjs/common';
 import { MarketMonitorService } from '../services/market-monitor.service';
+import { AdminService } from './admin.service';
+import { FundamentalsService } from '../agents/research/fundamentals.service';
+import { ResearchGraph } from '../agents/research/research-graph';
+import { DATABASE_CONNECTION } from '../database/database.module';
+import { watchlist, volatilityAlerts } from '../database/schema';
+import { desc, eq, and, gte, lt, sql } from 'drizzle-orm';
+import { BinanceApiService } from '../infrastructure/binance-api.service';
 
 @Controller('api/admin')
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
 
   constructor(
-    private readonly researchGraph: ResearchGraph,
-    private readonly dexService: DexScreenerService,
     private readonly marketMonitor: MarketMonitorService,
+    private readonly adminService: AdminService,
+    private readonly binanceApiService: BinanceApiService,
+    @Inject(FundamentalsService) private readonly fundamentalsService: FundamentalsService,
+    @Inject(ResearchGraph) private readonly researchGraph: ResearchGraph,
     @Inject(DATABASE_CONNECTION) private readonly db: any,
-  ) {}
+  ) {
+    this.logger.warn('>>> [SYSTEM] AdminController V13 (Realtime-Pulse) 已装载 <<<');
+  }
 
   @Get('gainers/latest')
-  async getLatestGainers(@Query('time') time?: string) {
-    this.logger.log(`[API] 正在检索涨幅快照 (时刻: ${time || 'latest'})...`);
+  async getLatestGainers() {
     try {
-      let targetTime = time;
-      
-      if (!targetTime) {
-        // Find latest observation time
-        const latestLog = await this.db.select()
-          .from(topGainersLogs)
-          .orderBy(desc(topGainersLogs.observationTime))
-          .limit(1);
+      const list = await this.adminService.getLatestList();
+      // V13: Enhance gainer list with real-time volatility metrics for cards
+      const enhancedList = await Promise.all(list.map(async (coin: any) => {
+        const volatility = await this.binanceApiService.getMultiIntervalVolatility(coin.symbol);
+        return { ...coin, volatility };
+      }));
 
-        if (!latestLog.length) return { success: true, data: [] };
-        targetTime = latestLog[0].observationTime;
-      }
-
-      const results = await this.db.select()
-        .from(topGainersLogs)
-        .where(eq(topGainersLogs.observationTime, new Date(targetTime)))
-        .orderBy(desc(topGainersLogs.priceChangePercent));
-
-      return { 
-        success: true, 
-        data: results, 
-        snapshotTime: targetTime,
-        captureTime: results[0]?.captureTime
+      return {
+        success: true,
+        data: enhancedList,
+        snapshotTime: list.length > 0 ? list[0].observationTime : null
       };
     } catch (error) {
       return { success: false, error: error.message };
     }
   }
 
-  @Get('gainers/history-marks')
-  async getHistoryMarks() {
-    try {
-      // Use SQL to select distinct observationTime
-      const results = await this.db.select({
-        time: topGainersLogs.observationTime
-      })
-      .from(topGainersLogs)
-      .groupBy(topGainersLogs.observationTime)
-      .orderBy(desc(topGainersLogs.observationTime))
-      .limit(100);
+  /**
+   * V13: Watchlist Management
+   */
+  @Get('watchlist')
+  async getWatchlist() {
+    const list = await this.db.select().from(watchlist).orderBy(desc(watchlist.createdAt));
+    return { success: true, data: list };
+  }
 
-      return { success: true, data: results.map((r: any) => r.time) };
+  @Post('watchlist')
+  async addToWatchlist(@Body() body: { symbol: string }) {
+    if (!body.symbol) throw new BadRequestException('Symbol is required');
+    const symbol = body.symbol.toUpperCase();
+    try {
+      await this.db.insert(watchlist).values({
+        symbol,
+        source: 'manual',
+      }).onConflictDoNothing();
+      return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
     }
+  }
+
+  @Delete('watchlist/:symbol')
+  async removeFromWatchlist(@Param('symbol') symbol: string) {
+    try {
+      await this.db.delete(watchlist).where(eq(watchlist.symbol, symbol.toUpperCase()));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * V13: Volatility Alert History
+   */
+  @Get('volatility/alerts')
+  async getVolatilityAlerts(
+    @Query('date') date?: string,
+    @Query('page') page: string = '1',
+    @Query('pageSize') pageSize: string = '20'
+  ) {
+    const p = parseInt(page);
+    const ps = parseInt(pageSize);
+    
+    let whereClause = undefined;
+    if (date) {
+      const start = new Date(date);
+      start.setHours(0,0,0,0);
+      const end = new Date(start);
+      end.setDate(start.getDate() + 1);
+      whereClause = and(
+        gte(volatilityAlerts.timestamp, start),
+        lt(volatilityAlerts.timestamp, end)
+      );
+    }
+
+    const totalResult = await this.db
+      .select({ count: sql`count(*)` })
+      .from(volatilityAlerts)
+      .where(whereClause);
+    const total = parseInt(totalResult[0].count);
+
+    const entries = await this.db
+      .select()
+      .from(volatilityAlerts)
+      .where(whereClause)
+      .orderBy(desc(volatilityAlerts.timestamp))
+      .limit(ps)
+      .offset((p - 1) * ps);
+
+    return { 
+      success: true, 
+      data: entries,
+      total,
+      page: p,
+      pageSize: ps,
+      totalPages: Math.ceil(total / ps)
+    };
   }
 
   @Get('gainers/historical-list')
   async getHistoricalList(
-    @Query('page') page: string = '1',
-    @Query('pageSize') pageSize: string = '10',
     @Query('date') date?: string,
+    @Query('time') time?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    this.logger.log(`[API] 正在检索历史流水分页 (页码: ${page}, 大小: ${pageSize}, 日期: ${date || 'all'})...`);
     try {
-      const p = Math.max(1, parseInt(page));
-      const ps = Math.max(1, parseInt(pageSize));
-      const offset = (p - 1) * ps;
-
-      let conditions = [];
-      if (date) {
-        const startOfDay = new Date(date);
-        startOfDay.setUTCHours(0, 0, 0, 0);
-        const endOfDay = new Date(date);
-        endOfDay.setUTCHours(23, 59, 59, 999);
-        conditions.push(gte(topGainersLogs.observationTime, startOfDay));
-        conditions.push(lte(topGainersLogs.observationTime, endOfDay));
-      }
-
-      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
-
-      // 1. Get total count
-      const totalRes = await this.db.select({ value: count() })
-        .from(topGainersLogs)
-        .where(whereClause);
-      const total = totalRes[0].value;
-
-      // 2. Get paginated data
-      const items = await this.db.select()
-        .from(topGainersLogs)
-        .where(whereClause)
-        .orderBy(desc(topGainersLogs.observationTime), desc(topGainersLogs.priceChangePercent))
-        .limit(ps)
-        .offset(offset);
-
-      return {
-        success: true,
-        data: items,
-        total,
-        page: p,
-        pageSize: ps,
-        totalPages: Math.ceil(total / ps)
-      };
+      const p = parseInt(page || '1');
+      const ps = parseInt(pageSize || '10');
+      const { data, total } = await this.adminService.getHistoricalList(date, time, p, ps);
+      return { success: true, data, page: p, pageSize: ps, totalPages: Math.ceil(total / ps), total };
     } catch (error) {
       return { success: false, error: error.message };
     }
   }
 
-  @Post('gainers/refresh')
-  async refreshGainers() {
-    this.logger.log(`[API] 收到手动刷新请求，正在触发快照任务...`);
+  @Post('research/discover')
+  async discoverNew(@Body() body: { symbol: string }) {
+    if (!body.symbol) throw new BadRequestException('Symbol is required');
     try {
-      await this.marketMonitor.captureTopGainers();
-      return this.getLatestGainers(); // Return the fresh batch
+      const candidates = await this.fundamentalsService.discoverCandidates(body.symbol);
+      return { success: true, data: candidates };
     } catch (error) {
       return { success: false, error: error.message };
     }
   }
 
-  @Get('health')
-  healthCheck() {
-    return { status: 'ok', timestamp: new Date().toISOString() };
-  }
-
-  @Post('research')
-  async runResearch(@Body() body: { symbol: string; name: string }) {
-    this.logger.log(`[API] 收到调研请求: ${body.symbol} (${body.name})`);
+  @Post('research/analyze')
+  async analyzeProject(@Body() body: { symbol: string; name: string; anchor?: string }) {
+    if (!body.symbol || !body.name) throw new BadRequestException('Symbol and name are required');
     try {
-      const result = await this.researchGraph.runResearch(body.symbol, body.name);
-      return { success: true, data: result };
-    } catch (error) {
-      return { success: false, error: error.message };
-    }
-  }
-
-  @Post('discovery')
-  async runDiscovery(@Body() body: { query: string }) {
-    this.logger.log(`[API] 收到全链检索请求: ${body.query}`);
-    try {
-      const result = await this.dexService.findMasterChain(body.query);
+      const result = await this.researchGraph.runResearch(body.symbol, body.name, body.anchor);
       return { success: true, data: result };
     } catch (error) {
       return { success: false, error: error.message };
