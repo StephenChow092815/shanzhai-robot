@@ -10,9 +10,8 @@ export class OpenTwitterService {
   constructor(private readonly configService: ConfigService) {}
 
   async searchByCoin(symbol: string, limit: number = 20) {
-    const token = this.configService.get<string>('TWITTER_TOKEN') || process.env.TWITTER_TOKEN;
+    const token = this.getValidToken();
     if (!token) {
-      this.logger.warn('TWITTER_TOKEN 未定义，跳过 6551 OpenTwitter 情绪源');
       return { items: [], raw: null };
     }
 
@@ -56,5 +55,20 @@ export class OpenTwitterService {
     if (Array.isArray(payload?.result)) return payload.result;
     if (Array.isArray(payload?.results)) return payload.results;
     return [];
+  }
+
+  private getValidToken() {
+    const token = this.configService.get<string>('TWITTER_TOKEN') || process.env.TWITTER_TOKEN;
+    if (!token) {
+      this.logger.warn('TWITTER_TOKEN 未定义，跳过 6551 OpenTwitter 情绪源');
+      return null;
+    }
+
+    if (!/^[\x20-\x7E]+$/.test(token)) {
+      this.logger.warn('TWITTER_TOKEN 含有非 ASCII 字符，已跳过 6551 OpenTwitter 情绪源。请检查 .env 是否填了中文占位文本。');
+      return null;
+    }
+
+    return token.trim();
   }
 }

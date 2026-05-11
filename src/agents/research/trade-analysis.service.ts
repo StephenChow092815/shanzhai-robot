@@ -20,7 +20,7 @@ export class TradeAnalysisService {
     @Inject(DexScreenerService) private readonly dexScreenerService: DexScreenerService,
     @Inject(ConfigService) private readonly configService: ConfigService,
   ) {
-    const apiKey = this.configService.get<string>('KIMI_API_KEY');
+    const apiKey = this.getAsciiEnv('KIMI_API_KEY') || 'missing-key';
     let proxyUrl = process.env.HTTPS_PROXY;
     if (proxyUrl && proxyUrl.includes('host.docker.internal')) {
       const isDocker = require('fs').existsSync('/.dockerenv');
@@ -30,13 +30,23 @@ export class TradeAnalysisService {
     this.model = new ChatOpenAI({
       modelName: 'moonshot-v1-32k',
       temperature: 0,
-      apiKey: apiKey || 'missing-key',
+      apiKey,
       maxTokens: 3000,
       configuration: {
         baseURL: 'https://api.moonshot.cn/v1',
         httpAgent: proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined,
       } as any,
     });
+  }
+
+  private getAsciiEnv(name: string) {
+    const value = this.configService.get<string>(name) || process.env[name];
+    if (!value) return null;
+    if (!/^[\x20-\x7E]+$/.test(value)) {
+      this.logger.warn(`${name} 含有非 ASCII 字符，请检查 .env 是否填了中文占位文本。`);
+      return null;
+    }
+    return value.trim();
   }
 
   async analyze(symbol: string) {
