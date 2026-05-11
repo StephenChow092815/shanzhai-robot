@@ -14,6 +14,7 @@ import { MarketMonitorService } from '../services/market-monitor.service';
 import { AdminService } from './admin.service';
 import { FundamentalsService } from '../agents/research/fundamentals.service';
 import { ResearchGraph } from '../agents/research/research-graph';
+import { TradeAnalysisService } from '../agents/research/trade-analysis.service';
 import { DATABASE_CONNECTION } from '../database/database.module';
 import { watchlist, volatilityAlerts } from '../database/schema';
 import { desc, eq, and, gte, lt, sql } from 'drizzle-orm';
@@ -29,6 +30,7 @@ export class AdminController {
     private readonly binanceApiService: BinanceApiService,
     @Inject(FundamentalsService) private readonly fundamentalsService: FundamentalsService,
     @Inject(ResearchGraph) private readonly researchGraph: ResearchGraph,
+    @Inject(TradeAnalysisService) private readonly tradeAnalysisService: TradeAnalysisService,
     @Inject(DATABASE_CONNECTION) private readonly db: any,
   ) {
     this.logger.warn('>>> [SYSTEM] AdminController V13 (Realtime-Pulse) 已装载 <<<');
@@ -41,13 +43,19 @@ export class AdminController {
       // V13: Enhance gainer list with real-time volatility metrics for cards
       const enhancedList = await Promise.all(list.map(async (coin: any) => {
         const volatility = await this.binanceApiService.getMultiIntervalVolatility(coin.symbol);
-        return { ...coin, volatility };
+        return {
+          ...coin,
+          realtimePrice: volatility.currentPrice,
+          intervalChanges: volatility.changes,
+          volatility,
+        };
       }));
 
       return {
         success: true,
         data: enhancedList,
-        snapshotTime: list.length > 0 ? list[0].observationTime : null
+        snapshotTime: list.length > 0 ? list[0].observationTime : null,
+        updatedAt: new Date().toISOString(),
       };
     } catch (error) {
       return { success: false, error: error.message };
@@ -164,14 +172,15 @@ export class AdminController {
     }
   }
 
-  @Post('research/analyze')
-  async analyzeProject(@Body() body: { symbol: string; name: string; anchor?: string }) {
-    if (!body.symbol || !body.name) throw new BadRequestException('Symbol and name are required');
+  @Post('trade/analyze')
+  async analyzeTrade(@Body() body: { symbol: string }) {
+    if (!body.symbol) throw new BadRequestException('Symbol is required');
     try {
-      const result = await this.researchGraph.runResearch(body.symbol, body.name, body.anchor);
+      const result = await this.tradeAnalysisService.analyze(body.symbol);
       return { success: true, data: result };
     } catch (error) {
       return { success: false, error: error.message };
     }
   }
+
 }

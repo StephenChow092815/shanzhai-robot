@@ -26,10 +26,14 @@ export class MarketMonitorService implements OnModuleInit {
    * V13: Initialize watchlist with current Top 10 if empty
    */
   private async initializeWatchlist() {
-    const existing = await this.db.select().from(watchlist).limit(1);
-    if (existing.length === 0) {
-      this.logger.log('观测池为空，正在执行首次自动同步...');
-      await this.handleDailyWatchlistReset();
+    try {
+      const existing = await this.db.select().from(watchlist).limit(1);
+      if (existing.length === 0) {
+        this.logger.log('观测池为空，正在执行首次自动同步...');
+        await this.handleDailyWatchlistReset();
+      }
+    } catch (error) {
+      this.logger.error(`初始化观测池失败 (数据库未就绪): ${error.message}`);
     }
   }
 
@@ -47,52 +51,56 @@ export class MarketMonitorService implements OnModuleInit {
    */
   @Cron(CronExpression.EVERY_MINUTE)
   async monitorAnomalyVolatility() {
-    const list = await this.db.select().from(watchlist);
-    if (list.length === 0) return;
+    try {
+      const list = await this.db.select().from(watchlist);
+      if (list.length === 0) return;
 
-    this.logger.debug(`[V13-Scout] 开始每分钟波动嗅探: 正在观测 ${list.length} 个币种...`);
+      this.logger.debug(`[V13-Scout] 开始每分钟波动嗅探: 正在观测 ${list.length} 个币种...`);
 
-    for (const item of list) {
-      try {
-        const ticker = await this.binanceApiService.getKlines(item.symbol, '1m', 1);
-        if (!ticker || ticker.length === 0) continue;
+      for (const item of list) {
+        try {
+          const ticker = await this.binanceApiService.getKlines(item.symbol, '1m', 1);
+          if (!ticker || ticker.length === 0) continue;
 
-        const currentPrice = parseFloat(ticker[0][4]); // Close price of last 1m
-        
-        if (item.lastPrice) {
-          const lastPrice = parseFloat(item.lastPrice);
-          const diff = ((currentPrice - lastPrice) / lastPrice) * 100;
+          const currentPrice = parseFloat(ticker[0][4]); // Close price of last 1m
           
-          if (Math.abs(diff) >= 5) {
-            this.logger.warn(`[脉冲预警] 检测到剧烈波动: ${item.symbol} ${diff.toFixed(2)}% | 价格: ${currentPrice}`);
+          if (item.lastPrice) {
+            const lastPrice = parseFloat(item.lastPrice);
+            const diff = ((currentPrice - lastPrice) / lastPrice) * 100;
             
-            // 1. Persist Alert
-            await this.db.insert(volatilityAlerts).values({
-              symbol: item.symbol,
-              changePercent: diff.toFixed(2),
-              priceAtAlert: currentPrice.toString(),
-              direction: diff > 0 ? 'up' : 'down',
-            });
+            if (Math.abs(diff) >= 5) {
+              this.logger.warn(`[脉冲预警] 检测到剧烈波动: ${item.symbol} ${diff.toFixed(2)}% | 价格: ${currentPrice}`);
+              
+              // 1. Persist Alert
+              await this.db.insert(volatilityAlerts).values({
+                symbol: item.symbol,
+                changePercent: diff.toFixed(2),
+                priceAtAlert: currentPrice.toString(),
+                direction: diff > 0 ? 'up' : 'down',
+              });
 
-            // 2. Broadcast via Socket.io
-            this.realtimeGateway.broadcastVolatility({
-              symbol: item.symbol,
-              change: parseFloat(diff.toFixed(2)),
-              price: currentPrice,
-              direction: diff > 0 ? 'up' : 'down',
-              timestamp: new Date().toISOString()
-            });
+              // 2. Broadcast via Socket.io
+              this.realtimeGateway.broadcastVolatility({
+                symbol: item.symbol,
+                change: parseFloat(diff.toFixed(2)),
+                price: currentPrice,
+                direction: diff > 0 ? 'up' : 'down',
+                timestamp: new Date().toISOString()
+              });
+            }
           }
+
+          // Always update lastPrice for next comparison
+          await this.db.update(watchlist)
+            .set({ lastPrice: currentPrice.toString() })
+            .where(eq(watchlist.id, item.id));
+
+        } catch (error) {
+          this.logger.error(`[Scout-Error] 观测 ${item.symbol} 价格失败: ${error.message}`);
         }
-
-        // Always update lastPrice for next comparison
-        await this.db.update(watchlist)
-          .set({ lastPrice: currentPrice.toString() })
-          .where(eq(watchlist.id, item.id));
-
-      } catch (error) {
-        this.logger.error(`[Scout-Error] 观测 ${item.symbol} 价格失败: ${error.message}`);
       }
+    } catch (error) {
+      this.logger.error(`波动监听任务执行失败 (数据库连接错误): ${error.message}`);
     }
   }
 
@@ -103,26 +111,29 @@ export class MarketMonitorService implements OnModuleInit {
   async handleDailyWatchlistReset() {
     this.logger.log('执行零点任务：正在清理并同步观测列表...');
     
-    // 1. Remove all auto-added entries
-    await this.db.delete(watchlist).where(eq(watchlist.source, 'auto'));
+    try {
+      // 1. Remove all auto-added entries
+      await this.db.delete(watchlist).where(eq(watchlist.source, 'auto'));
 
-    // 2. Get current Top 10 gainers
-    const top10 = await this.binanceApiService.getTopGainers(10);
-    
-    // 3. Insert into watchlist
-    for (const coin of top10) {
-      try {
-        await this.db.insert(watchlist).values({
-          symbol: coin.symbol,
-          source: 'auto',
-          lastPrice: coin.lastPrice.toString()
-        }).onConflictDoNothing();
-      } catch (e) {
-        this.logger.error(`同步观测币种 ${coin.symbol} 失败: ${e.message}`);
+      // 2. Get current Top 10 gainers
+      const top10 = await this.binanceApiService.getTopGainers(10);
+      
+      // 3. Insert into watchlist
+      for (const coin of top10) {
+        try {
+          await this.db.insert(watchlist).values({
+            symbol: coin.symbol,
+            source: 'auto',
+            lastPrice: coin.lastPrice.toString()
+          }).onConflictDoNothing();
+        } catch (e) {
+          this.logger.error(`同步观测币种 ${coin.symbol} 失败: ${e.message}`);
+        }
       }
+      this.logger.log(`零点同步完成。观测池已就绪，当前共 ${top10.length} 个自动观测币种。`);
+    } catch (error) {
+      this.logger.error(`零点任务同步失败 (数据库或 API 错误): ${error.message}`);
     }
-    
-    this.logger.log(`零点同步完成。观测池已就绪，当前共 ${top10.length} 个自动观测币种。`);
   }
 
   async captureTopGainers() {

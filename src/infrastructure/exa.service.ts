@@ -27,12 +27,13 @@ export class ExaService {
     return clean.substring(0, 100);
   }
 
-  async searchProjectInfo(query: string, numResults: number = 5) {
+  async search(query: string, options: { numResults?: number, includeDomains?: string[], useAutoprompt?: boolean } = {}) {
     try {
-      this.logger.log(`[Exa] 正在执行精准搜索: ${query}`);
+      this.logger.log(`[Exa] 正在执行搜索: ${query}${options.includeDomains ? ` (限定域名: ${options.includeDomains.join(',')})` : ''}`);
       const result = await this.exa.searchAndContents(query, {
-        numResults,
-        useAutoprompt: false,
+        numResults: options.numResults || 5,
+        useAutoprompt: options.useAutoprompt ?? false,
+        includeDomains: options.includeDomains,
         text: { maxCharacters: 15000 },
       });
       return result.results;
@@ -40,6 +41,10 @@ export class ExaService {
       this.logger.error(`[Exa] 搜索失败: ${error.message}`);
       throw error;
     }
+  }
+
+  async searchProjectInfo(query: string, numResults: number = 5) {
+    return this.search(query, { numResults });
   }
 
   async findOfficialLinks(symbol: string, name: string, anchor?: string) {

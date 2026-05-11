@@ -1,20 +1,23 @@
 import { Injectable, Logger, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ChatOpenAI } from '@langchain/openai';
-import { ExaService } from '../../infrastructure/exa.service';
 import { z } from 'zod';
 import { StructuredOutputParser } from '@langchain/core/output_parsers';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { CoinGeckoService } from '../../infrastructure/coingecko.service';
 
 const DiscoverySchema = z.array(z.object({
   name: z.string().describe('Full name of the project.'),
   symbol: z.string().describe('Symbol of the project.'),
   ecosystem: z.string().describe('Primary blockchain or ecosystem.'),
   summary: z.string().describe('Brief 1-sentence description (Chinese).'),
-  recent_activity: z.string().describe('Recent events (Chinese).'),
+  market_cap: z.string().optional().describe('Market cap from CoinGecko.'),
+  circulating_supply: z.string().optional().describe('Circulating supply details.'),
+  fdv: z.string().optional().describe('Fully Diluted Valuation.'),
+  vcs: z.array(z.string()).optional().describe('VC backers.'),
   official_links: z.array(z.string()).optional(),
-})).describe('List of potential matching projects.');
+})).describe('Token discovery details');
 
 @Injectable()
 export class FundamentalsService {
@@ -23,7 +26,7 @@ export class FundamentalsService {
   private readonly discoveryParser = StructuredOutputParser.fromZodSchema(DiscoverySchema);
 
   constructor(
-    @Inject(ExaService) private readonly exaService: ExaService,
+    @Inject(CoinGeckoService) private readonly cgService: CoinGeckoService,
     @Inject(ConfigService) private readonly configService: ConfigService,
   ) {
     const apiKey = this.configService.get<string>('KIMI_API_KEY');
@@ -45,13 +48,6 @@ export class FundamentalsService {
     });
   }
 
-  private sanitizeRiskText(text: string): string {
-    if (!text) return '';
-    return text
-      .replace(/[\d,]+\s*(USDT|USD|ETH|SOL|\$|元|奖励)/gi, '[REDACTED AMOUNT]')
-      .replace(/(airdrop|rewards|bonus|giveaway|prize|winning|event|campaign|celebration|奖励|抽奖|空投)/gi, 'listing event info');
-  }
-
   private extractJson(content: string): any {
     try {
       const jsonBlock = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/```\n([\s\S]*?)\n```/);
@@ -70,119 +66,78 @@ export class FundamentalsService {
     }
   }
 
-  private chunkContext(context: string, maxSize: number = 8000): string[] {
-    const chunks: string[] = [];
-    let currentPos = 0;
-    while (currentPos < context.length) {
-      let endPos = currentPos + maxSize;
-      if (endPos >= context.length) {
-        chunks.push(context.substring(currentPos));
-        break;
-      }
-      const sentenceEndRegex = /[。\.!\?]/g;
-      let lastSentenceEnd = -1;
-      const searchWindow = context.substring(currentPos, endPos + 500);
-      let match;
-      while ((match = sentenceEndRegex.exec(searchWindow)) !== null) {
-        if (match.index <= maxSize + 200) lastSentenceEnd = match.index;
-        else break;
-      }
-      if (lastSentenceEnd !== -1) endPos = currentPos + lastSentenceEnd + 1;
-      chunks.push(context.substring(currentPos, endPos).trim());
-      currentPos = endPos;
-    }
-    return chunks;
-  }
-
   async discoverCandidates(symbol: string) {
-    this.logger.log(`[V11-Discover] 启动强力召回复活 ${symbol}...`);
-    const results = await Promise.all([
-      this.exaService.searchProjectInfo(`Official website and whitepaper for cryptocurrency project with ticker "$${symbol}"`, 5),
-      this.exaService.searchProjectInfo(`"${symbol}" Binance Alpha listing result and announcements April 2026`, 8),
-      this.exaService.searchProjectInfo(`"${symbol}" token MEXC Airdrop+ vs Genius Foundation Foundation listing`, 8),
-      this.exaService.searchProjectInfo(`exact name of the project with symbol "${symbol}" launching in April 2026`, 5)
-    ]);
-    const allResults = results.flat();
-    const prioritiedUnique = Array.from(new Map(allResults.map(r => [r.url, r])).values()).sort((a, b) => {
-      const auth = ['binance.com', 'mexc.com', 'gitbook.io', 'docs.', 'rootdata.com'];
-      return (auth.some(d => b.url.includes(d)) ? 1 : 0) - (auth.some(d => a.url.includes(d)) ? 1 : 0);
-    });
-    const context = prioritiedUnique.map((r, i) => `Source [${i+1}]: ${r.title}\nURL: ${r.url}\nContent: ${r.text}`).join('\n\n---\n\n');
+    this.logger.log(`[Discover] 启动轻量代币候选发现，不调用 MCP: ${symbol}...`);
+
+    let officialWebsite = null;
+    const normalizedSymbol = symbol.trim().toUpperCase();
+
+    const cgData = await this.cgService.getCoinData(normalizedSymbol.replace(/USDT$/, ''));
+
+    let financialContext = '';
+    if (cgData) {
+      this.logger.log(`[V14-Context] CoinGecko 匹配成功: ${cgData.name}`);
+      officialWebsite = cgData.platforms?.website || '';
+
+      financialContext = `
+[COINGECKO FINANCIAL DATA]
+Project Name: ${cgData.name}
+Symbol: ${cgData.symbol}
+Circulating Supply: ${cgData.circulating_supply || 'Unknown'}
+Total Supply: ${cgData.total_supply || 'Unknown'}
+Market Cap: $${cgData.mcap || 'Unknown'}
+FDV: $${cgData.fdv || 'Unknown'}
+Categories: ${cgData.categories.join(', ')}
+Description: ${cgData.description}
+      `;
+    }
+
+    const context = [
+      financialContext,
+      officialWebsite ? `Official Website: ${officialWebsite}` : '',
+    ].filter(Boolean).join('\n\n---\n\n');
+
+    if (!context) {
+      this.logger.warn(`未找到关于 ${normalizedSymbol} 的 CoinGecko 信息`);
+      return [];
+    }
+
     const promptTemplate = new PromptTemplate({
-      template: `Identify and separate projects with symbol "{symbol}". Find "Genius Foundation" (2026 Binance Alpha). {format_instructions}\nContext:\n{context}`,
+      template: `
+        Task: Extract project details for "${symbol}". 
+        Priority: Use CoinGecko for project identity and financial numbers. Do not infer news or sentiment.
+        
+        Rules:
+        1. "name": Extract the full project name.
+        2. "summary": One concise Chinese sentence.
+        3. "market_cap", "circulating_supply", "fdv": Must include if present in context.
+        4. "vcs": Extract investors as a list.
+        5. "official_links": Include official website from context.
+        6. Do not invent facts. If a field is unknown, omit it or use "Unknown".
+        
+        {format_instructions}
+        
+        Context:
+        {context}
+      `,
       inputVariables: ['symbol', 'context'],
       partialVariables: { format_instructions: this.discoveryParser.getFormatInstructions() },
     });
-    const res = await this.model.invoke(await promptTemplate.format({ symbol, context: context.substring(0, 25000) }));
-    return this.extractJson(res.content as string);
+
+    const res = await this.model.invoke(await promptTemplate.format({ symbol: normalizedSymbol, context: context.substring(0, 30000) }));
+    const result = this.extractJson(res.content as string);
+
+    return {
+      candidates: Array.isArray(result) ? result : [result].filter(Boolean),
+      sources: {
+        coinGecko: cgData,
+      },
+    };
   }
 
+  // analyze 接口已废弃，直接返回空或报错，防止被误调用
   async research(symbol: string, name: string, anchor?: string) {
-    this.logger.log(`[V12-Research] 标准化调研启动: ${name} (${symbol})`);
-    const safeAnchor = this.sanitizeRiskText(anchor || '');
-    try {
-      const searches = await Promise.all([
-        this.exaService.findOfficialLinks(symbol, name, safeAnchor),
-        this.exaService.findTechnicalDocs(symbol, name, safeAnchor),
-        this.exaService.findTokenomicsDocs(symbol, name, safeAnchor),
-        this.exaService.findListingAnnouncements(symbol, name, safeAnchor),
-        this.exaService.findTgeSpecificDocs(symbol, name, safeAnchor),
-      ]);
-      const uniqueResults = Array.from(new Map(searches.flat().map(r => [r.url, r])).values());
-      const prioritied = uniqueResults.sort((a, b) => {
-        const auth = ['binance.com', 'mexc.com', 'gitbook.io', 'docs.'];
-        return (auth.some(d => b.url.includes(d)) ? 1 : 0) - (auth.some(d => a.url.includes(d)) ? 1 : 0);
-      });
-      const rawContext = prioritied.map((r, i) => `[Source ${i+1}]\n${r.text}`).join('\n\n---\n\n');
-      const safeContext = this.sanitizeRiskText(rawContext);
-      const chunks = this.chunkContext(safeContext, 8000);
-      const factMapResults = await Promise.all(chunks.map(async (chunk, i) => {
-        try {
-          const res = await this.model.invoke(`Extract financial facts for ${name} (${symbol}): TGE, Supply, Allocation. Snippet:\n${chunk}`);
-          return `[Fragment ${i+1}]: ${res.content}`;
-        } catch (e) {
-          return `[Fragment ${i+1}]: Safety rejection.`;
-        }
-      }));
-      const consolidatedFacts = factMapResults.join('\n\n');
-
-      const reducePrompt = `
-        Create a flat financial JSON for {name} ({symbol}).
-        
-        CRITICAL V12 RULES:
-        1. DO NOT nest data under a "fundamentals" key. Return data fields directly.
-        2. The "allocation" array MUST use this exact format: {{"category": "Name", "percentage": number, "description": "..."}}. 
-           NEVER use category names as keys (e.g., NEVER do: {{"ispo": {{...}}}}).
-        
-        TGE: April 13, 2026.
-        FACTS:
-        {facts}
-
-        EXPECTED FLAT JSON:
-        {{
-          "name": "{name}",
-          "project_info": {{ "summary": "...", "official_website": "...", "whitepaper": "..." }},
-          "tokenomics": {{
-            "tge_date": "...",
-            "total_supply": "...",
-            "allocation": [
-              {{ "category": "Team", "percentage": 15, "description": "..." }},
-              {{ "category": "ISPO", "percentage": 25, "description": "..." }}
-            ]
-          }},
-          "listing_timeline": [],
-          "risk_assessment": {{}}
-        }}
-        OUTPUT ONLY JSON.
-      `;
-
-      const finalRes = await this.model.invoke(await new PromptTemplate({
-        template: reducePrompt, inputVariables: ['facts', 'name', 'symbol']
-      }).format({ facts: consolidatedFacts, name, symbol }));
-
-      return this.extractJson(finalRes.content as string);
-    } catch (error) {
-      return { name, symbol, status: 'failed', error: error.message };
-    }
+    this.logger.warn(`[DEPRECATED] Research method called for ${symbol}. Please use discoverCandidates.`);
+    return null;
   }
 }

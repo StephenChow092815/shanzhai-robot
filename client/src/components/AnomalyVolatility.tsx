@@ -93,7 +93,7 @@ export const AnomalyVolatility: React.FC<{ socketAlert: any }> = ({ socketAlert 
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-1000">
       {/* Left: Watchlist Management */}
       <div className="lg:col-span-1 space-y-4">
-        <div className="glass-card p-6 rounded-3xl border border-white/5 bg-zinc-900/40 backdrop-blur-xl">
+        <div className="glass-card p-5 md:p-6 rounded-3xl border border-white/5 bg-zinc-900/40 backdrop-blur-xl">
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-[10px] font-black uppercase tracking-[0.4em] text-zinc-500">Observation Pool</h3>
             <Zap className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
@@ -104,7 +104,7 @@ export const AnomalyVolatility: React.FC<{ socketAlert: any }> = ({ socketAlert 
               value={newSymbol}
               onChange={(e) => setNewSymbol(e.target.value)}
               placeholder="e.g. BTCUSDT"
-              className="flex-1 bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-[11px] font-bold text-white outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
+              className="min-w-0 flex-1 bg-black/40 border border-white/5 rounded-xl px-4 py-3 text-[11px] font-bold text-white outline-none focus:ring-1 focus:ring-indigo-500 transition-all"
             />
             <button 
               onClick={addToWatchlist}
@@ -140,13 +140,13 @@ export const AnomalyVolatility: React.FC<{ socketAlert: any }> = ({ socketAlert 
 
       {/* Right: Alerts Timeline */}
       <div className="lg:col-span-2 space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2 px-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-2 px-0 md:px-2">
           <div className="flex items-center gap-2">
             <Activity className="w-4 h-4 text-rose-500" />
             <h3 className="text-lg font-black text-white uppercase tracking-tighter italic">Anomaly Pulse Timeline</h3>
           </div>
           {/* V13.3: Date Filter UI */}
-          <div className="flex items-center gap-2 bg-white/5 border border-white/5 rounded-xl px-3 py-1.5 backdrop-blur-md">
+          <div className="flex items-center gap-2 bg-white/5 border border-white/5 rounded-xl px-3 py-2 backdrop-blur-md">
             <Calendar className="w-3 h-3 text-zinc-500" />
             <input 
               type="date"
@@ -155,14 +155,14 @@ export const AnomalyVolatility: React.FC<{ socketAlert: any }> = ({ socketAlert 
                 setFilterDate(e.target.value);
                 setPage(1);
               }}
-              className="bg-transparent border-none outline-none text-[10px] font-black text-zinc-400 uppercase tracking-widest cursor-pointer"
+              className="min-w-0 flex-1 bg-transparent border-none outline-none text-[10px] font-black text-zinc-400 uppercase tracking-widest cursor-pointer"
             />
           </div>
         </div>
 
         <div className="space-y-3">
           {alerts.length === 0 ? (
-            <div className="glass-card p-12 flex flex-col items-center justify-center rounded-3xl border border-white/5 border-dashed">
+            <div className="glass-card p-8 md:p-12 flex flex-col items-center justify-center rounded-3xl border border-white/5 border-dashed">
               <Clock className="w-8 h-8 text-zinc-700 mb-4" />
               <div className="text-[10px] font-black text-zinc-600 uppercase tracking-widest">
                 {filterDate ? `No alerts for ${filterDate}` : 'Awaiting Volatility pulse...'}
@@ -172,24 +172,24 @@ export const AnomalyVolatility: React.FC<{ socketAlert: any }> = ({ socketAlert 
             alerts.map((alert, i) => (
               <div 
                 key={alert.id || i} 
-                className={`glass-card p-5 rounded-3xl border transition-all animate-in slide-in-from-right-4 duration-500 ${
+                className={`glass-card p-4 md:p-5 rounded-3xl border transition-all animate-in slide-in-from-right-4 duration-500 ${
                   alert.direction === 'up' ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-rose-500/20 bg-rose-500/5'
                 }`}
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-4 min-w-0">
                     <div className={`p-3 rounded-2xl ${alert.direction === 'up' ? 'bg-emerald-500/20' : 'bg-rose-500/20'}`}>
                       {alert.direction === 'up' ? <TrendingUp className="w-5 h-5 text-emerald-500" /> : <TrendingDown className="w-5 h-5 text-rose-500" />}
                     </div>
                     <div>
-                      <div className="text-xl font-black text-white italic tracking-tighter">{alert.symbol}</div>
+                      <div className="text-lg md:text-xl font-black text-white italic tracking-tighter truncate">{alert.symbol}</div>
                       <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
                         {new Date(alert.timestamp).toLocaleDateString()} at {new Date(alert.timestamp).toLocaleTimeString()}
                       </div>
                     </div>
                   </div>
 
-                  <div className="text-right">
+                  <div className="text-left sm:text-right">
                     <div className={`text-2xl font-black italic tracking-tighter ${alert.direction === 'up' ? 'text-emerald-400' : 'text-rose-400'}`}>
                       {alert.direction === 'up' ? '+' : ''}{alert.changePercent}%
                     </div>
@@ -203,9 +203,9 @@ export const AnomalyVolatility: React.FC<{ socketAlert: any }> = ({ socketAlert 
 
         {/* V13.3: Pagination UI */}
         {totalPages > 1 && (
-          <div className="flex items-center justify-between p-4 bg-black/40 border border-white/5 rounded-2xl backdrop-blur-xl mt-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between p-4 bg-black/40 border border-white/5 rounded-2xl backdrop-blur-xl mt-6">
             <span className="text-[9px] font-black text-zinc-600 uppercase tracking-widest italic">Total Logs: {totalAlerts}</span>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 justify-between sm:justify-start">
               <button 
                 onClick={() => setPage(p => Math.max(1, p - 1))}
                 disabled={page === 1}
