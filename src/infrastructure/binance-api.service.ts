@@ -243,6 +243,104 @@ export class BinanceApiService {
     }
   }
 
+  async getOpenInterestTimeframes(symbol: string) {
+    const futuresSymbol = this.toUsdtFuturesSymbol(symbol);
+    try {
+      const current = await axios.get(`${this.fapiUrl}/fapi/v1/openInterest`, {
+        params: { symbol: futuresSymbol },
+        proxy: this.getProxyConfig(),
+        timeout: 8000,
+      }).then((res) => res.data).catch((error) => {
+        this.logger.warn(`获取当前 OI 失败 (${futuresSymbol}): status=${error?.response?.status || 'NO_STATUS'} message=${error.message}`);
+        return null;
+      });
+
+      const [m15, h1, h4, d1] = await Promise.all([
+        this.getOpenInterestWindow(futuresSymbol, '5m', 4),
+        this.getOpenInterestWindow(futuresSymbol, '5m', 12),
+        this.getOpenInterestWindow(futuresSymbol, '15m', 16),
+        this.getOpenInterestWindow(futuresSymbol, '1h', 24),
+      ]);
+
+      const openInterest = current?.openInterest ? parseFloat(current.openInterest) : null;
+      const hasData = openInterest !== null || [m15, h1, h4, d1].some((item) => item?.openInterest !== null);
+      if (!hasData) {
+        this.logger.warn(`Binance OI 无数据: input=${symbol} futuresSymbol=${futuresSymbol}，可能未上线 Binance U 本位合约。`);
+      }
+
+      return {
+        venue: 'binance_futures',
+        inputSymbol: symbol,
+        symbol: futuresSymbol,
+        openInterest,
+        available: hasData,
+        reason: hasData ? null : 'no_binance_futures_oi',
+        timeframes: {
+          '15m': m15,
+          '1h': h1,
+          '4h': h4,
+          '1d': d1,
+        },
+      };
+    } catch (error) {
+      this.logger.warn(`获取 OI 分周期失败 (${futuresSymbol}): ${error.message}`);
+      return {
+        venue: 'binance_futures',
+        inputSymbol: symbol,
+        symbol: futuresSymbol,
+        openInterest: null,
+        available: false,
+        reason: 'request_failed',
+        timeframes: {
+          '15m': null,
+          '1h': null,
+          '4h': null,
+          '1d': null,
+        },
+        error: error.message,
+      };
+    }
+  }
+
+  private async getOpenInterestWindow(symbol: string, period: string, limit: number) {
+    const rows = await axios.get(`${this.fapiUrl}/futures/data/openInterestHist`, {
+      params: { symbol, period, limit },
+      proxy: this.getProxyConfig(),
+      timeout: 8000,
+    }).then((res) => res.data).catch((error) => {
+      this.logger.warn(`获取 OI 历史失败 (${symbol}, ${period}, limit=${limit}): status=${error?.response?.status || 'NO_STATUS'} message=${error.message}`);
+      return [];
+    });
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return { period, openInterest: null, openInterestValue: null, changePercent: null, reason: 'empty_history' };
+    }
+
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+    const firstOi = parseFloat(first?.sumOpenInterest || '0');
+    const lastOi = parseFloat(last?.sumOpenInterest || '0');
+    const lastValue = parseFloat(last?.sumOpenInterestValue || '0');
+    const changePercent = firstOi > 0 && !Number.isNaN(lastOi)
+      ? parseFloat((((lastOi - firstOi) / firstOi) * 100).toFixed(2))
+      : null;
+
+    return {
+      period,
+      openInterest: Number.isNaN(lastOi) ? null : lastOi,
+      openInterestValue: Number.isNaN(lastValue) ? null : lastValue,
+      changePercent,
+      timestamp: last?.timestamp ? new Date(Number(last.timestamp)).toISOString() : null,
+    };
+  }
+
+  private toUsdtFuturesSymbol(symbol: string) {
+    const normalized = symbol.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (normalized.endsWith('USDT')) return normalized;
+    if (normalized.endsWith('USD')) return `${normalized}T`;
+    return `${normalized}USDT`;
+  }
+
   /**
    * V13: Aggregate volatility across multiple timeframes
    */

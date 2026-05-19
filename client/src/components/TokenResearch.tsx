@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, BarChart3, Gauge, MessageCircle, Newspaper, Search } from 'lucide-react';
+import { BarChart3, ExternalLink, Globe2, MessageCircle, Newspaper, Search, ShieldAlert, Users } from 'lucide-react';
 
 const stripHtml = (value: any) => {
   if (value === null || value === undefined) return '';
@@ -33,11 +33,11 @@ const formatValue = (value: any) => {
   return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
 };
 
-const formatPercent = (value: any, scale = 1) => {
+const formatRatioPercent = (value: any) => {
   if (value === null || value === undefined || value === '') return '--';
   const number = Number(value);
   if (Number.isNaN(number)) return String(value);
-  return `${(number * scale).toLocaleString(undefined, { maximumFractionDigits: 4 })}%`;
+  return `${(number * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
 };
 
 const metricTone = (value: any, positiveWhenAboveZero = true) => {
@@ -90,9 +90,15 @@ export function TokenResearch({ initialSymbol = '' }: { initialSymbol?: string }
 
   const analysis = result?.analysis;
   const sources = result?.sources || {};
-  const cex = sources.cex || {};
-  const derivatives = cex.derivatives || {};
-  const dex = sources.dex || {};
+  const binanceOi = sources.binanceOi || {};
+  const oiTimeframes = binanceOi.timeframes || {};
+  const coinGecko = sources.coinGecko || null;
+  const cgLinks = coinGecko?.links || {};
+  const ave = sources.ave || null;
+  const aveSummary = ave?.summary || {};
+  const aveRisk = ave?.risk || {};
+  const aveConcentration = ave?.holders?.concentration || {};
+  const aveChanges = ave?.klines?.intervalChanges || {};
   const newsItems = sources.openNews?.items || [];
   const twitterItems = sources.openTwitter?.items || [];
 
@@ -124,7 +130,7 @@ export function TokenResearch({ initialSymbol = '' }: { initialSymbol?: string }
 
       {loading && (
         <div className="py-20 text-center text-zinc-700 uppercase tracking-widest animate-pulse font-black">
-          正在调用 OpenNews / OpenTwitter / CEX / DEX 并生成交易判断...
+          正在调用 Ave / Binance OI / OpenNews / OpenTwitter 并生成交易判断...
         </div>
       )}
 
@@ -182,86 +188,189 @@ export function TokenResearch({ initialSymbol = '' }: { initialSymbol?: string }
 
       {result && (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <section className="glass-card rounded-2xl border border-emerald-500/15 bg-emerald-500/[0.03] p-5 md:p-6 space-y-4">
+          <section className="glass-card rounded-2xl border border-sky-500/15 bg-sky-500/[0.03] p-5 md:p-6 space-y-4">
             <div className="flex items-center gap-3">
-              <BarChart3 className="w-5 h-5 text-emerald-300" />
-              <h3 className="text-sm font-black text-white uppercase tracking-widest">CEX 交易数据</h3>
+              <Globe2 className="w-5 h-5 text-sky-300" />
+              <h3 className="text-sm font-black text-white uppercase tracking-widest">CoinGecko 项目资料</h3>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {[
-                ['交易场所', cex.venue],
-                ['实时价格', `$${formatValue(cex.currentPrice || cex.lastPrice)}`],
-                ['24H', `${formatValue(cex.priceChangePercent24h)}%`],
-                ['24H 成交额', `$${formatValue(cex.quoteVolume24h)}`],
-                ['15M', `${formatValue(cex.intervalChanges?.['15m'])}%`],
-                ['1H', `${formatValue(cex.intervalChanges?.['1h'])}%`],
-                ['4H', `${formatValue(cex.intervalChanges?.['4h'])}%`],
-                ['1D', `${formatValue(cex.intervalChanges?.['1d'])}%`],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-xl border border-white/5 bg-black/30 p-4">
-                  <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">{label}</div>
-                  <div className="text-sm font-black text-white break-words">{value || '--'}</div>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section className="glass-card rounded-2xl border border-fuchsia-500/15 bg-fuchsia-500/[0.03] p-5 md:p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <Gauge className="w-5 h-5 text-fuchsia-300" />
-              <h3 className="text-sm font-black text-white uppercase tracking-widest">订单流 / 衍生品指标</h3>
-            </div>
-            {derivatives ? (
+            {coinGecko ? (
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {[
-                    ['OI 当前', formatValue(derivatives.openInterest), derivatives.openInterest],
-                    ['OI 1H变化', formatPercent(derivatives.openInterestChange1hPercent), derivatives.openInterestChange1hPercent],
-                    ['Funding', formatPercent(derivatives.fundingRate, 100), derivatives.fundingRate],
-                    ['Taker买卖比', formatValue(derivatives.takerBuySellRatio1h), (derivatives.takerBuySellRatio1h || 1) - 1],
-                    ['CVD 15M(USDT)', formatValue(derivatives.cvdQuote15m), derivatives.cvdQuote15m],
-                    ['CVD 1H(USDT)', formatValue(derivatives.cvdQuote1h), derivatives.cvdQuote1h],
-                    ['买盘占比15M', formatPercent(derivatives.cvdBuyRatio15m, 100), (derivatives.cvdBuyRatio15m || 0.5) - 0.5],
-                    ['买盘占比1H', formatPercent(derivatives.cvdBuyRatio1h, 100), (derivatives.cvdBuyRatio1h || 0.5) - 0.5],
-                  ].map(([label, value, toneValue]: any) => (
+                    ['项目', `${coinGecko.name || '--'} (${coinGecko.symbol || '--'})`],
+                    ['CoinGecko ID', coinGecko.id],
+                    ['市值', `$${formatValue(coinGecko.mcap)}`],
+                    ['FDV', `$${formatValue(coinGecko.fdv)}`],
+                    ['流通量', formatValue(coinGecko.circulating_supply)],
+                    ['总供应', formatValue(coinGecko.total_supply)],
+                  ].map(([label, value]) => (
                     <div key={label} className="rounded-xl border border-white/5 bg-black/30 p-4">
                       <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">{label}</div>
-                      <div className={`text-sm font-black break-words ${metricTone(toneValue)}`}>{value || '--'}</div>
+                      <div className="text-sm font-black text-white break-words">{value || '--'}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    ['官网', cgLinks.homepage],
+                    ['Twitter/X', cgLinks.twitter_url],
+                    ['Telegram', cgLinks.telegram_url],
+                    ['Reddit', cgLinks.subreddit_url],
+                  ].filter(([, url]) => Boolean(url)).map(([label, url]) => (
+                    <a
+                      key={label}
+                      href={url as string}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-2 rounded-xl border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-sky-200 hover:border-sky-300/40"
+                    >
+                      {label} <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  ))}
+                  {cgLinks.twitter_screen_name && (
+                    <span className="rounded-xl border border-white/5 bg-black/30 px-3 py-2 text-[10px] font-black text-zinc-400">
+                      @{cgLinks.twitter_screen_name}
+                    </span>
+                  )}
+                </div>
+                {coinGecko.description && (
+                  <p className="rounded-xl border border-white/5 bg-black/20 p-4 text-xs text-zinc-400 leading-relaxed">
+                    {stripHtml(coinGecko.description)}
+                  </p>
+                )}
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/5 bg-black/30 p-5 text-sm text-zinc-500">CoinGecko 未找到匹配项目资料。</div>
+            )}
+          </section>
+
+          <section className="glass-card rounded-2xl border border-orange-500/15 bg-orange-500/[0.03] p-5 md:p-6 space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <ShieldAlert className="w-5 h-5 text-orange-300" />
+                <h3 className="text-sm font-black text-white uppercase tracking-widest">Ave 链上分析</h3>
+              </div>
+              <span className="text-[10px] font-black text-zinc-600">{ave?.available ? 'ONLINE' : 'OFFLINE'}</span>
+            </div>
+            {ave?.available && ave?.token ? (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {[
+                    ['Token ID', aveSummary.tokenId],
+                    ['链', aveSummary.chain],
+                    ['项目', `${aveSummary.name || '--'} (${aveSummary.symbol || '--'})`],
+                    ['持有人', formatValue(aveSummary.holders)],
+                    ['价格', `$${formatValue(aveSummary.priceUsd)}`],
+                    ['流动性', `$${formatValue(aveSummary.liquidityUsd)}`],
+                    ['24H 成交额', `$${formatValue(aveSummary.volume24hUsd)}`],
+                    ['市值', `$${formatValue(aveSummary.marketCap)}`],
+                    ['FDV', `$${formatValue(aveSummary.fdv)}`],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-xl border border-white/5 bg-black/30 p-4">
+                      <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">{label}</div>
+                      <div className="text-sm font-black text-white break-words">{value || '--'}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-white/5 bg-black/30 p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <ShieldAlert className="w-4 h-4 text-orange-300" />
+                      <div className="text-[10px] font-black text-white uppercase tracking-widest">合约风险</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">等级</div>
+                        <div className="text-sm font-black text-orange-200">{aveRisk.level || '--'}</div>
+                      </div>
+                      <div>
+                        <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">评分</div>
+                        <div className="text-sm font-black text-orange-200">{formatValue(aveRisk.score)}</div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {(aveRisk.flags || []).slice(0, 8).map((flag: string) => (
+                        <span key={flag} className="rounded-lg border border-orange-500/20 bg-orange-500/10 px-2 py-1 text-[9px] font-bold text-orange-200">
+                          {flag}
+                        </span>
+                      ))}
+                      {(!aveRisk.flags || aveRisk.flags.length === 0) && <span className="text-xs text-zinc-500">暂无风险标记。</span>}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-white/5 bg-black/30 p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Users className="w-4 h-4 text-orange-300" />
+                      <div className="text-[10px] font-black text-white uppercase tracking-widest">持仓集中度</div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        ['Top1', aveConcentration.top1],
+                        ['Top5', aveConcentration.top5],
+                        ['Top10', aveConcentration.top10],
+                        ['Top100', aveConcentration.top100],
+                      ].map(([label, value]) => (
+                        <div key={label}>
+                          <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">{label}</div>
+                          <div className="text-sm font-black text-white">{formatRatioPercent(value)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    ['15M', aveChanges['15m']],
+                    ['1H', aveChanges['1h']],
+                    ['4H', aveChanges['4h']],
+                    ['1D', aveChanges['1d']],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-xl border border-white/5 bg-black/30 p-4">
+                      <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">{label}</div>
+                      <div className={`text-sm font-black ${metricTone(value)}`}>{formatValue(value)}%</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-white/5 bg-black/30 p-5 text-sm text-zinc-500">
+                {ave?.reason === 'missing_api_key' ? 'AVE_API_KEY 未配置，已跳过 Ave 链上数据。' : 'Ave 未找到匹配代币或接口暂不可用。'}
+              </div>
+            )}
+          </section>
+
+          <section className="glass-card rounded-2xl border border-emerald-500/15 bg-emerald-500/[0.03] p-5 md:p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <BarChart3 className="w-5 h-5 text-emerald-300" />
+              <h3 className="text-sm font-black text-white uppercase tracking-widest">Binance OI</h3>
+            </div>
+            {binanceOi?.available ? (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    ['15M', oiTimeframes['15m']],
+                    ['1H', oiTimeframes['1h']],
+                    ['4H', oiTimeframes['4h']],
+                    ['1D', oiTimeframes['1d']],
+                  ].map(([label, item]: any) => (
+                    <div key={label} className="rounded-xl border border-white/5 bg-black/30 p-4">
+                      <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">{label}</div>
+                      <div className="text-sm font-black text-white break-words">{formatValue(item?.openInterest)}</div>
+                      <div className={`mt-1 text-[10px] font-black ${metricTone(item?.changePercent)}`}>{formatValue(item?.changePercent)}%</div>
                     </div>
                   ))}
                 </div>
                 <div className="rounded-xl border border-white/5 bg-black/20 p-4 text-xs text-zinc-500 leading-relaxed">
-                  CVD 为主动买入量减主动卖出量的近似值。OI 上升且 CVD 为正通常代表多头增仓更健康；价格上涨但 CVD 为负或资金费率过热时，需要警惕诱多和多头拥挤。
+                  OI 为币安 U 本位合约持仓量。上方大数字是各周期最近一个采样点 OI，小数字是该周期内 OI 变化百分比；OI 快速上升通常代表杠杆拥挤，需要结合 Ave 链上量价判断。
                 </div>
               </>
             ) : (
-              <div className="rounded-xl border border-white/5 bg-black/30 p-5 text-sm text-zinc-500">该交易对未返回 Futures 衍生品指标。</div>
-            )}
-          </section>
-
-          <section className="glass-card rounded-2xl border border-cyan-500/15 bg-cyan-500/[0.03] p-5 md:p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <Activity className="w-5 h-5 text-cyan-300" />
-              <h3 className="text-sm font-black text-white uppercase tracking-widest">DEX 流动性数据</h3>
-            </div>
-            {dex ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {[
-                  ['主链', dex.masterChainId],
-                  ['名称', dex.name],
-                  ['DEX 价格', `$${formatValue(dex.priceUsd)}`],
-                  ['流动性', `$${formatValue(dex.liquidityUsd)}`],
-                  ['24H 成交额', `$${formatValue(dex.volume24hUsd)}`],
-                  ['置信度', `${formatValue((dex.confidenceScore || 0) * 100)}%`],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-xl border border-white/5 bg-black/30 p-4">
-                    <div className="text-[9px] font-black text-zinc-700 uppercase tracking-widest mb-2">{label}</div>
-                    <div className="text-sm font-black text-white break-words">{value || '--'}</div>
-                  </div>
-                ))}
+              <div className="rounded-xl border border-white/5 bg-black/30 p-5 text-sm text-zinc-500">
+                该交易对未返回 Binance Futures OI{binanceOi?.symbol ? `（${binanceOi.symbol}）` : ''}。
+                {binanceOi?.reason === 'no_binance_futures_oi' ? ' 可能未上线币安 U 本位合约。' : ''}
               </div>
-            ) : (
-              <div className="rounded-xl border border-white/5 bg-black/30 p-5 text-sm text-zinc-500">未找到 DEX 数据。</div>
             )}
           </section>
 

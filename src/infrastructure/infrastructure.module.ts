@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { BinanceApiService } from './binance-api.service';
 import { DexScreenerService } from './dexscreener.service';
 import { CoinGeckoService } from './coingecko.service';
+import { AveApiService } from './ave-api.service';
 import { OpenNewsService } from './opennews.service';
 import { OpenTwitterService } from './opentwitter.service';
 import { RealtimeGateway } from './realtime.gateway';
@@ -11,6 +12,7 @@ import { RealtimeGateway } from './realtime.gateway';
     BinanceApiService, 
     DexScreenerService,
     CoinGeckoService,
+    AveApiService,
     OpenNewsService,
     OpenTwitterService,
     RealtimeGateway
@@ -19,6 +21,7 @@ import { RealtimeGateway } from './realtime.gateway';
     BinanceApiService, 
     DexScreenerService,
     CoinGeckoService,
+    AveApiService,
     OpenNewsService,
     OpenTwitterService,
     RealtimeGateway
